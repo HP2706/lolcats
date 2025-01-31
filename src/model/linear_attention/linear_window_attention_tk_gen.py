@@ -5,7 +5,10 @@ from typing import Optional, Tuple, List
 import torch
 import torch.nn.functional as F
 
-from thunderkittens import hedgehog as tk_window_hedgehog_attention
+try:
+    from thunderkittens import hedgehog as tk_window_hedgehog_attention
+except:
+    print('Failed to import ThunderKittens; ensure it is installed')
 
 from .linear_window_attention_tk_long import LolcatsTKWindowLongAttention
 from .linear_attention import LinearAttentionState

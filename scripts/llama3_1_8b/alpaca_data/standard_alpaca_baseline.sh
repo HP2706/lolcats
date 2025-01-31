@@ -2,13 +2,18 @@
 
 export PYTHONPATH=/home/simarora/code/lolcats/  # TODO: Change this to your lolcats path
 
-CUDA_VISIBLE_DEVICES=0 python distill_llama.py \
-    --model_config llama3_1_8b/distill_llama_3_8b_lk_smd_wtk64_fd64_w01 \
-    --distill_config llama3_1_8b/distill_alpaca_clean_xent1_mse1000_lr1e-2 \
+CUDA_VISIBLE_DEVICES=5 python distill_llama.py \
+    --model_config llama3_1_8b/distill_llama3_1_8b_lk_smd_wtk64_fd64_w01 \
+    --distill_config llama3_1_8b/distill_alpaca_clean_xent0_mse1000_lr1e-2 \
     --finetune_config llama3_1_8b/finetune_qkvo_alpaca_clean \
     --eval_config eval_rp_clean \
-    --lk_zero_init --verbose --seed 0 --replicate 800 --state_chunk_len 1024 \
+    --lk_zero_init \
+    --verbose \
+    --seed 0 \
+    --replicate 800 \
+    --state_chunk_len 1024 \
     --num_train_epochs 2 
+
 
 #########
 # NOTE
