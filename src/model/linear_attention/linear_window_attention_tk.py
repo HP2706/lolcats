@@ -232,8 +232,7 @@ class LolcatsTKWindowAttention(LolcatsLinearAttention):
                                           accumulate_in_fp32=True)
             # Concatenate heads and apply output projection
             y_true = y_true.transpose(1, 2).contiguous().view(b, l, self.hidden_size)
-            y_true = self.o_proj(y_true)
-        
+            y_true = self.o_proj(y_true)        
         return y_true, attn_weights, past_key_value
 
 

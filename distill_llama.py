@@ -33,7 +33,7 @@ from src.model.utils import count_parameters
 def get_args():
     """Parse command line arguments"""
     parser = argparse.ArgumentParser()
-    parser.add_argument("--project_name", type=str, default='lolcats')
+    parser.add_argument("--project_name", type=str, default='qam-linearizing')
     parser.add_argument("--model_config", type=str, default=None)
     parser.add_argument("--distill_config", type=str, default=None)
     parser.add_argument("--finetune_config", type=str, default=None)
@@ -163,7 +163,7 @@ def main():
         args.attention_type = model_config['attention']['attention_type']
     except AttributeError:
         args.attention_type = 'lolcats_llama'
-    model = model_loader.load(model_type=args.attention_type)
+    model = model_loader.load(model_type=args.attention_type).to(args.device)
     model.state_chunk_len = model_config['attention']['state_chunk_len']
 
     if args.verbose:

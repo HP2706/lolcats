@@ -187,6 +187,7 @@ class PretrainedLlamaLoader(PretrainedModelLoader):
                 model, use_gradient_checkpointing=self.gradient_checkpointing,
                 gradient_checkpointing_kwargs={'use_reentrant': False},
             )
+            
         return model
 
     def load_tokenizer(self):
