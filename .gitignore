@@ -7,6 +7,10 @@ wandb
 apikeys.txt
 # C extensions
 *.so
+*.err
+*.out
+*.log
+models
 
 # Distribution / packaging
 .Python
