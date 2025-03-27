@@ -147,16 +147,13 @@ class OurTrainer():
 
         model.train()
         model.zero_grad()        
+        
         pbar = tqdm(self.train_loader, leave=False, colour='blue',
                     desc=f'-> Training (epoch {epoch} / {self.num_train_epochs})')
         total_loss = 0
         eval_for_step = False
 
-        # Initial eval
-        if self.initial_eval:
-            print('')
-            print('-> Initial eval')
-            self.compute_eval_metrics(model, step=self.grad_step)
+
         
         # model.to(self.device)
         for ix, data in enumerate(pbar):
@@ -165,11 +162,8 @@ class OurTrainer():
             loss /= accum_iter
             if not self.compute_loss_backprop:
                 # loss.backward() did not occur in compute_loss
-                try:
-                    with torch.autograd.set_detect_anomaly(True):
-                        loss.backward()
-                except Exception as e:
-                    breakpoint()
+                with torch.autograd.set_detect_anomaly(True):
+                    loss.backward()
             if (self.step + 1) % accum_iter == 0:  # and self.step != 0:
                 self.optimizer.step()
                 if not self.scheduler_step_after_epoch and self.scheduler is not None:
@@ -184,11 +178,23 @@ class OurTrainer():
                 total_loss += loss.item()
             else:
                 total_loss += loss
-            desc = f"Training epoch {epoch} | loss: {total_loss / (ix + 1):.3f} | lr: {self.optimizer.param_groups[0]['lr']:.5f}"
-            desc += f' | gradient step: {self.grad_step}'
+
+            # Create a compact metrics string
+            metrics_dict = {
+                'loss': f"{total_loss / (ix + 1):.3f}",
+                'lr': f"{self.optimizer.param_groups[0]['lr']:.3e}",  # Use scientific notation
+                'grad': self.grad_step  # Shortened from 'gradient step'
+            }
+            # Add other metrics more concisely
             for k, v in train_metrics.items():
-                desc += f' | {k}: {v:.3f}'
+                metrics_dict[k[:4]] = f"{v:.3f}"  # Truncate long metric names
+
+            # Create progress bar description with just epoch
+            desc = f"Epoch {epoch}"
+            
+            # Update the progress bar with metrics in the postfix
             pbar.set_description(desc)
+            pbar.set_postfix(metrics_dict, refresh=True)
 
             # Logging
             if (self.grad_step) % (self.logging_steps):

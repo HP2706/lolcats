@@ -169,6 +169,7 @@ class PretrainedLlamaLoader(PretrainedModelLoader):
         return model
 
     def load_tokenizer(self):
+        print('loading tokenizer with kwargs:', self.loading_kwargs)
         return AutoTokenizer.from_pretrained(**self.loading_kwargs)
 
 

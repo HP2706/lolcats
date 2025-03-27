@@ -20,7 +20,6 @@ def init_wandb(args: ArgumentParser) -> any:
     else:
         import wandb
         wandb.init(config={},
-                   entity=args.wandb_entity,
                    name=args.run_name,
                    project=args.project_name)
     return wandb

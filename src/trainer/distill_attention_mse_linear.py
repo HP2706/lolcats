@@ -70,8 +70,7 @@ class OurTrainer(DefaultTrainer):
         position_ids = torch.arange(input_seq_len).view(1, -1)
 
         loss_mse = 0
-        for layer_idx, layer in enumerate(tqdm(traverse_layers(model), desc='Processing layer', 
-                                               leave=False)):
+        for layer_idx, layer in enumerate(traverse_layers(model)):
             attn_input, attn_output = true_attn_io[layer_idx]
             attn_preds = layer.self_attn(attn_input.to(model.device),
                                          attention_mask=None,
@@ -83,6 +82,8 @@ class OurTrainer(DefaultTrainer):
         loss_mse = loss_mse / (layer_idx + 1) * self.mse_factor
         loss = loss_mse
         torch.cuda.empty_cache()
+        
+        print("loss, line 87 requires_grad", loss.requires_grad)
 
         if 'position_ids' in data:
             outputs = {'loss_mse': loss_mse.item(),

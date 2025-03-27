@@ -2,7 +2,9 @@
 __pycache__/
 *.py[cod]
 *$py.class
-
+data
+wandb
+apikeys.txt
 # C extensions
 *.so
 
