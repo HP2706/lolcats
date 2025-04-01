@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2022 EleutherAI and the HuggingFace Inc. team. All rights reserved.
+# Copyright 2024 Qwen and the HuggingFace Inc. team. All rights reserved.
 #
 # This code is based on EleutherAI's GPT-NeoX library and the GPT-NeoX
 # and OPT implementations in this library. It has been modified from its
@@ -18,41 +18,39 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-Thin wrappers and replacement classes for LlamaForCausalLM
+Thin wrappers and replacement classes for QwenForCausalLM
 """
 from typing import Optional, Tuple, List, Union
 
-import warnings
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-
-from transformers.models.llama.modeling_llama import (
-    LlamaModel, LlamaForCausalLM, LLAMA_INPUTS_DOCSTRING,
+from transformers.models.qwen2.modeling_qwen2 import (
+    Qwen2Model, Qwen2ForCausalLM, QWEN2_INPUTS_DOCSTRING
 )
-from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
+from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.cache_utils import Cache, DynamicCache
-from transformers.utils import (
-    add_start_docstrings_to_model_forward, logging,
-)
-
 from .convert_model import get_attention_cache
+from transformers.utils import add_start_docstrings_to_model_forward
+from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
+from logging import getLogger
+from torch.nn import functional as F
+logger = getLogger(__name__)
 
-logger = logging.get_logger(__name__)
+
 
 # Modified from transformers.models.llama.modeling_llama.LlamaModel (v4.43)
-class LolcatsLlamaModel(LlamaModel):
+class LolcatsQwen2Model(Qwen2Model):
     """
-    Wrapper for Llama or Mistral-like base model
+    Wrapper for Qwen2-like base model
 
-    Modified from transformers.models.llama.modeling_llama.LlamaModel
+    Modified from transformers.models.qwen2.modeling_qwen2.Qwen2Model
     -> Only difference is using KV state for past_key_values instead of cache
     """
     def __init__(self, *args: any, **kwargs: any):
         super().__init__(*args, **kwargs)
         self.layerwise_cpu = False
 
-    @add_start_docstrings_to_model_forward(LLAMA_INPUTS_DOCSTRING)
+    @add_start_docstrings_to_model_forward(QWEN2_INPUTS_DOCSTRING)
     def forward(
         self,
         input_ids: torch.LongTensor = None,
@@ -174,9 +172,9 @@ class LolcatsLlamaModel(LlamaModel):
         )
 
 
-class LolcatsLlamaForCausalLM(LlamaForCausalLM):
+class LolcatsQwen2ForCausalLM(Qwen2ForCausalLM):
     """
-    Wrapper for Llama-like autoregressive language model
+    Wrapper for Llama or Mistral-like autoregressive language model
     """
     def __init__(self, config):
         # Adapt config to LlamaConfig
@@ -186,118 +184,15 @@ class LolcatsLlamaForCausalLM(LlamaForCausalLM):
             config.rope_scaling = None
         if getattr(config, 'pretraining_tp', None) is None:
             config.pretraining_tp = 1
+        if getattr(config, 'pretraining_tp', None) is None:
+            config.pretraining_tp = 1
+        if getattr(config, 'mlp_bias', None) is None:
+            config.mlp_bias = False
         super().__init__(config)
-        self.model = LolcatsLlamaModel(config)
+        self.model = LolcatsQwen2Model(config)
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
         # Initialize weights and apply final processing
         self.post_init()
 
-    def forward(self, *args: any, labels: Optional[torch.LongTensor] = None, **kwargs: any):
-        # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
-        outputs = self.model(*args, **kwargs)
-        hidden_states = outputs[0]
-        # if False:  # getattr(self.model.layers[0].self_attn, 'train_attention', False):
-        #     logits = None  # MZ 8/25: Sorry, was trying stuff
-        # regular training
-        if self.config.pretraining_tp > 1:
-            lm_head_slices = self.lm_head.weight.split(self.vocab_size // self.config.pretraining_tp, dim=0)
-            logits = [F.linear(hidden_states, lm_head_slices[i]) 
-                        for i in range(self.config.pretraining_tp)]
-            logits = torch.cat(logits, dim=-1)
-        else:
-            logits = self.lm_head(hidden_states)
-        logits = logits.float()
-            
-        return CausalLMOutputWithPast(
-            logits=logits,
-            past_key_values=outputs.past_key_values,
-            hidden_states=outputs.hidden_states,
-            attentions=outputs.attentions,
-        )
-
-
-class LooooolcatsLlamaForCausalLM(LolcatsLlamaForCausalLM):
-    """
-    Wrapper for Llama or Mistral-like autoregressive language model
-    -> Experimental / WIP; but goal is to combine chunked linear attention during training
-       to process long contexts with minimally-growing memory usage
-    """
-    def chunk_forward(self, *args: any, **kwargs: any):
-        """Call this when training / processing one chunk"""
-        return super().forward(*args, **kwargs)
-
-    def forward(
-        self,
-        input_ids: torch.LongTensor = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
-        labels: Optional[torch.LongTensor] = None,
-        use_cache: Optional[bool] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
-        cache_position: Optional[torch.LongTensor] = None,  # Ignored for now, new Transformers >4.36
-    ) -> Union[Tuple, CausalLMOutputWithPast]:
-        """
-        Forward pass where we chunk inputs 
-        """
-        self.generating = False
-        if use_cache is not True:
-            use_cache = True
-        
-        if attention_mask is not None and use_cache:
-            warnings.warn(
-                "Sorry padding currently not supported. Setting attention_mask to None (will still be causal)."
-            )
-            attention_mask = None
-
-        if past_key_values is None:
-            # Determine and setup our KV cache or state
-            attention_type = getattr(self.model.layers[0].self_attn, 'attention_type', None)
-            past_key_values = get_attention_cache(attention_type)
-
-        if input_ids.shape[-1] == 1:  # Heuristic to detect generating
-            return super().forward(input_ids, attention_mask, position_ids, 
-                                   past_key_values, inputs_embeds, labels,
-                                   use_cache, output_attentions, output_hidden_states,
-                                   return_dict)
-        else:
-            assert self.training is False  # To train this way, use training loop to chunk
-            if self.generating:  # Heuristic to detect new sample
-                self.generating = False
-                # Determine and setup our KV cache or state
-                attention_type = getattr(self.model.layers[0].self_attn, 'attention_type', None)
-                past_key_values = get_attention_cache(attention_type)
-
-            # Split inputs into chunks, and do linear attention over each (passing the states)
-            input_ids = torch.split(input_ids, self.state_chunk_len, dim=-1)
-            if position_ids is not None:
-                position_ids = torch.split(position_ids, self.state_chunk_len, dim=-1)
-
-            all_logits = []  # save these
-            for _idx, _input_ids in enumerate(input_ids):
-                if self.training:
-                    print(f'Model processing _input_ids.shape:', _input_ids.shape)
-                outputs = super().forward(_input_ids, None, 
-                                          position_ids[_idx] if position_ids is not None else None, 
-                                          past_key_values, inputs_embeds, 
-                                          labels=None,
-                                          use_cache=True, 
-                                          output_attentions=False, 
-                                          output_hidden_states=False,
-                                          return_dict=True,)
-                past_key_values = outputs.past_key_values
-                all_logits.append(outputs.logits)
-
-                if _idx == len(input_ids) - 1:
-                    self.generating = True  # time to generate; if no generation will reset
-                    
-            return CausalLMOutputWithPast(
-                # loss=loss,
-                logits=torch.cat(all_logits, dim=-2),  # b, l, d
-                past_key_values=past_key_values,
-            )

@@ -19,15 +19,21 @@ def get_pretrained_loader(pretrained_model_name_or_path: str,
     """
     Return the appropriate loader for the pretrained model
     """
-
     if 'lama' in pretrained_model_name_or_path:  # Llama or llama
         return PretrainedLlamaLoader(
             pretrained_model_name_or_path=pretrained_model_name_or_path,
             huggingface_token=huggingface_token,
             **model_kwargs,
         )
-    elif 'istral' in pretrained_model_name_or_path:  # Mistral or mistral; 
+    elif 'istral' in pretrained_model_name_or_path:  # Mistral or mistral
         return PretrainedMistralLoader(   
+            pretrained_model_name_or_path=pretrained_model_name_or_path,
+            huggingface_token=huggingface_token,
+            **model_kwargs,
+        )
+    elif 'deepscaler' in pretrained_model_name_or_path.lower():  # Qwen
+        print('-> Loading Qwen model')
+        return PretrainedQwenLoader(
             pretrained_model_name_or_path=pretrained_model_name_or_path,
             huggingface_token=huggingface_token,
             **model_kwargs,
@@ -204,3 +210,38 @@ class PretrainedMistralLoader(PretrainedModelLoader):
                 gradient_checkpointing_kwargs={'use_reentrant': False},
             )
         return model
+
+
+class PretrainedQwenLoader(PretrainedModelLoader):
+    def load(self, model_type: str = None):
+        if model_type is None:
+            from transformers import QwenForCausalLM as model_class
+        elif 'lolcats_llama' in model_type:
+            from .modeling_qwen import LolcatsQwen2ForCausalLM as model_class
+        else:
+            if model_type == 'flash_attention_2':
+                self.loading_kwargs['attn_implementation'] = model_type
+            from transformers import AutoModelForCausalLM as model_class
+            print('-> Loading from AutoModelForCausalLM')
+            
+        model = model_class.from_pretrained(**self.loading_kwargs)
+        if self.peft_id is not None:
+            from peft import PeftModel
+            model = PeftModel.from_pretrained(
+                model, 
+                self.peft_id,
+                torch_dtype=self.loading_kwargs['torch_dtype'],
+                device_map='auto',
+                cache_dir=self.loading_kwargs['cache_dir'],
+            ).merge_and_unload()
+            
+        if self.quantization:
+            model = prepare_model_for_kbit_training(
+                model, use_gradient_checkpointing=self.gradient_checkpointing,
+                gradient_checkpointing_kwargs={'use_reentrant': False},
+            )
+        return model
+
+    def load_tokenizer(self):
+        print("loading tokenizer with kwargs:", self.loading_kwargs)
+        return AutoTokenizer.from_pretrained(**self.loading_kwargs)

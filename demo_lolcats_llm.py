@@ -26,7 +26,7 @@ system_prompt = """Below is an instruction that describes a task. Write a respon
 """
 
 
-def get_args():
+def get_args(parse: bool = True):
     parser = argparse.ArgumentParser()
     # Model load + setup
     parser.add_argument("--attn_mlp_checkpoint_path", type=str, default=None)
@@ -38,7 +38,12 @@ def get_args():
     parser.add_argument("--num_generations", type=int, default=1)
     parser.add_argument("--top_k", type=int, default=50)
     parser.add_argument("--top_p", type=float, default=0.95)
-    parser.add_argument("--max_new_tokens", type=int, default=1024)
+    parser.add_argument("--max_new_tokens", type=int, default=2048)
+
+
+    # Inference
+    parser.add_argument("--use_cuda_kernels", type=int, default=0)
+    parser.add_argument("--use_attention", action='store_true', default=False)
 
     # Miscellaneous
     parser.add_argument("--benchmark", action='store_true', default=False)
@@ -50,12 +55,16 @@ def get_args():
     parser.add_argument("--attn_checkpoint_path", type=str, default=None)
     parser.add_argument("--peft_checkpoint_path", type=str, default=None)
 
-    args = parser.parse_args()
-    if args.attn_mlp_checkpoint_path is None and args.attn_checkpoint_path is not None:
-        args.attn_mlp_checkpoint_path = args.attn_checkpoint_path
-    if args.finetune_checkpoint_path is None and args.peft_checkpoint_path is not None:
-        args.finetune_checkpoint_path = args.peft_checkpoint_path
-    return args
+    if parse:
+        args = parser.parse_args()
+        if args.attn_mlp_checkpoint_path is None and args.attn_checkpoint_path is not None:
+            args.attn_mlp_checkpoint_path = args.attn_checkpoint_path
+        if args.finetune_checkpoint_path is None and args.peft_checkpoint_path is not None:
+            args.finetune_checkpoint_path = args.peft_checkpoint_path
+        return args
+    else:
+        return parser
+
 
 
 def get_lm_eval_lolcats_model(model_kwargs: dict, lolcats_model: bool = True):
@@ -198,19 +207,27 @@ def setup_fsdp_config(config, args, checkpoint_name: str = 'finetune'):
     return config
 
 
-def load_model_from_checkpoint(attn_mlp_checkpoint_path: str, 
-                               finetune_checkpoint_path: str, 
+def load_model_from_checkpoint(attn_mlp_checkpoint_path: str = None, 
+                               finetune_checkpoint_path: str = None, 
+                               model_config_path: str = None,
+                               distill_config_path: str = None,
+                               finetune_config_path: str = None,
                                config_dir: str = 'configs',
                                print_model: bool = False, 
                                debug: bool = False,
-                               huggingface_token: str = None):
+                               huggingface_token: str = None,
+                               use_cuda_kernels: bool = False,
+                               use_attention: bool = False):
+
+    is_local = attn_mlp_checkpoint_path.endswith(".pt")
+    
     rank = 0
     # Get configs from checkpoint paths
     try:
         model_config = attn_mlp_checkpoint_path.split('-m=')[-1].split('-f=')[0]
         distill_config = attn_mlp_checkpoint_path.split('-d=')[-1].split('-m=')[0]
     except Exception as e:
-        model_config = finetune_checkpoint_path.split('-m=')[-1].split('-f=')[0]
+        model_config = finetune_checkpoint_path.split('-m=')[-1].split('-f=')[0] if finetune_checkpoint_path else None
         distill_config = None
     
     model_config = join(config_dir, 'model', f'{model_config}.yaml')
@@ -222,9 +239,13 @@ def load_model_from_checkpoint(attn_mlp_checkpoint_path: str,
     else:
         distill_config = {}
 
-    finetune_config = finetune_checkpoint_path.split('-f=')[-1].split('-')[0]
-    finetune_config = join(config_dir, 'experiment', f'{finetune_config}.yaml')
-    finetune_config = OmegaConf.load(finetune_config)
+    # Only load finetune config if checkpoint provided
+    if finetune_checkpoint_path:
+        finetune_config = finetune_checkpoint_path.split('-f=')[-1].split('-')[0]
+        finetune_config = join(config_dir, 'experiment', f'{finetune_config}.yaml')
+        finetune_config = OmegaConf.load(finetune_config)
+    else:
+        finetune_config = None
 
     # Load initial model
     model_loader = get_pretrained_loader(**model_config.model, 
@@ -238,21 +259,49 @@ def load_model_from_checkpoint(attn_mlp_checkpoint_path: str,
         print_header('Pretrained Model')
         print(model)
 
-    # Add subquadratic attentions
+    print(model, "model")
+        
+        
+    if use_attention:
+        model = model_loader.load('softmax')
+        return model, model_config, tokenizer
+
+    model = model_loader.load(model_config['attention']['attention_type'])
+    if use_cuda_kernels:
+        print('*** Using TK CUDA kernels **')
+        model_config['attention']['attention_type'] = 'lolcats_llama_window_tk_gen'
+
+    # Swap the softmax to linear attention 
+    if is_local:
+        checkpoint_path = attn_mlp_checkpoint_path
+    else: 
+        checkpoint_path = None
     model, distill_peft_config = load_and_convert_attns(model, model_config,
-                                                        attention_type=None,  # in model_config
-                                                        checkpoint_path=attn_mlp_checkpoint_path,
+                                                        attention_type=None, 
+                                                        checkpoint_path=checkpoint_path,
                                                         print_model=debug,
                                                         merge_loras=False,
                                                         peft_gradient_checkpointing=False,
                                                         train_attention=False)
     
     # Add PEFT parameters
-    model, ft_peft_config = load_and_convert_finetune(model, finetune_config,
-                                                      checkpoint_path=finetune_checkpoint_path,
-                                                      print_model=debug,
-                                                      merge_loras=False,
-                                                      peft_gradient_checkpointing=False)
+    if is_local:
+        checkpoint_path = attn_mlp_checkpoint_path
+    else: 
+        checkpoint_path = None
+    
+        
+    if finetune_config:
+        model, ft_peft_config = load_and_convert_finetune(model, finetune_config,
+                                                        checkpoint_path=checkpoint_path,
+                                                        print_model=debug,
+                                                        merge_loras=False,
+                                                        peft_gradient_checkpointing=False)
+
+   
+    if use_cuda_kernels:
+        print('*** Using TK CUDA kernels ***')
+
     if print_model:
         print_header('*** Model after checkpoint load ***')
         print(model)
@@ -260,24 +309,28 @@ def load_model_from_checkpoint(attn_mlp_checkpoint_path: str,
     return model, model_config, tokenizer
 
 
-def get_model_name(attn_mlp_checkpoint_path: str, finetune_checkpoint_path: str, 
+
+
+
+def get_model_name(attn_mlp_checkpoint_path: str, 
+                   finetune_checkpoint_path: str = None,  # Make optional
                    model_config: str = None):
     model_name = '😺 ' if attn_mlp_checkpoint_path is not None else ''
-    if 'llama3_8b_' in finetune_checkpoint_path:
-        model_name += f'Llama-3-8B'
-    elif 'llama3_1_8b_' in finetune_checkpoint_path:
-        model_name += f'Llama-3.1-8B'
-    elif 'llama2_7b_' in finetune_checkpoint_path:
-        model_name += f'Llama-2-7B'
-    elif 'mistral_7b_' in finetune_checkpoint_path:
-        model_name += f'Mistral-7B'
+    if finetune_checkpoint_path:  # Only check if exists
+        if 'llama3_8b_' in finetune_checkpoint_path:
+            model_name += f'Llama-3-8B'
+        elif 'llama3_1_8b_' in finetune_checkpoint_path:
+            model_name += f'Llama-3.1-8B'
+        elif 'llama2_7b_' in finetune_checkpoint_path:
+            model_name += f'Llama-2-7B'
+        elif 'mistral_7b_' in finetune_checkpoint_path:
+            model_name += f'Mistral-7B'
 
     if attn_mlp_checkpoint_path is not None:
         model_name += f'-LoLCATs'
 
-    if 'alpaca_clean' in finetune_checkpoint_path:
+    if finetune_checkpoint_path and 'alpaca_clean' in finetune_checkpoint_path:
         model_name += f'-Alpaca'
-
     elif model_config is not None:
         if 'llama3_8b_' in model_config:
             model_name += f'Llama-3-8B'
@@ -295,9 +348,9 @@ def main():
     model, model_config, tokenizer = load_model_from_checkpoint(
         args.attn_mlp_checkpoint_path, args.finetune_checkpoint_path, 
         config_dir=args.config_dir, print_model = args.print_model, debug = args.debug,
+        use_cuda_kernels=args.use_cuda_kernels, use_attention=args.use_attention
     )
     model.eval()
-    input_len = len(tokenizer(system_prompt)['input_ids'])
 
     model_name = get_model_name(args.attn_mlp_checkpoint_path, 
                                 args.finetune_checkpoint_path, 

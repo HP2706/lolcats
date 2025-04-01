@@ -8,6 +8,8 @@ from omegaconf import OmegaConf
 from src.utils.logging import print_header, _format_arg
 from .convert_model import convert_attention
 from .peft import create_peft_config
+#from transformers.models.llama.modeling_llama import LlamaAttention
+#from transformers.models.qwen2.modeling_qwen2 import Qwen2Attention
 
 
 def load_and_convert_attns(model: nn.Module,
@@ -33,7 +35,7 @@ def load_and_convert_attns(model: nn.Module,
     if attention_type is not None:  # override default
         model_config['attention']['attention_type'] = attention_type
     model_config['attention']['rank'] = rank   # multi-gpu debugging
-
+    
     model = convert_attention(model, model_config['attention'], 
                               train_attention, remove_base_attn)
 
@@ -100,9 +102,11 @@ def load_and_convert_finetune(model: nn.Module,
     """
     Load trained adapter / model weights
     """
+    print("Starting load_and_convert_finetune function...")
     # Add low-rank adapters
     peft_config = None
     if finetune_config.finetune.method == 'lora':
+        print("Setting up LoRA configuration...")
         if getattr(finetune_config.finetune, 'kwargs', None) is not None:
             model, peft_config = create_peft_config(
                 model, finetune_config.finetune,
@@ -111,15 +115,18 @@ def load_and_convert_finetune(model: nn.Module,
             )
         # Keep specified weights trainable
         if 'trainable_weights' in finetune_config.finetune:
+            print("Setting trainable weights...")
             for name in finetune_config.finetune['trainable_weights']:
                 for n, p in model.named_parameters():
                     if name in n:
                         p.requires_grad = True
     else:
+        print("Setting all parameters to not require grad...")
         for p in model.parameters():
             p.requires_grad = False
         # Keep specified weights trainable
         if 'trainable_weights' in finetune_config.finetune:
+            print("Setting specific trainable weights...")
             for name in finetune_config.finetune['trainable_weights']:
                 for n, p in model.named_parameters():
                     if name in n: 
@@ -129,10 +136,10 @@ def load_and_convert_finetune(model: nn.Module,
                                 p.requires_grad = True
                         else:
                             p.requires_grad = True
-        
 
     # Load weights
     if checkpoint_path:
+        print(f"Loading weights from checkpoint: {checkpoint_path}")
         state_dict = torch.load(checkpoint_path)['model_state_dict']
         _keys = model.load_state_dict(state_dict, strict=False)
         try:
@@ -153,6 +160,7 @@ def load_and_convert_finetune(model: nn.Module,
 
     if merge_loras:
         try:
+            print("Merging LoRAs...")
             model = model.merge_and_unload()
             if print_model and rank == 0:
                 print_header('*** Model (after merging adapters) ***')
@@ -170,4 +178,5 @@ def load_and_convert_finetune(model: nn.Module,
         if count == 0:
             print('(none)')
 
+    print("Finished load_and_convert_finetune function")
     return model, peft_config

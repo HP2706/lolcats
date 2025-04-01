@@ -10,5 +10,23 @@
 #SBATCH --gres=gpu:a100:1
 #SBATCH --partition=gpu
 
-bash setup.bash
-bash train.bash
+# Parse command line arguments
+MODEL_TYPE="r1"  # Default to r1
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --model_type)
+      MODEL_TYPE="$2"
+      shift 2
+      ;;
+    *)
+      echo "Unknown parameter: $1"
+      exit 1
+      ;;
+  esac
+done
+
+# Update job name based on model type
+#SBATCH --job-name=lolcats_${MODEL_TYPE}_train
+
+bash env_setup.bash
+bash train.bash --model_type ${MODEL_TYPE}

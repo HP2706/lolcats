@@ -20,7 +20,9 @@ def create_peft_config(model: Module,
     -> Assumes that all non-trainable weights have been frozen already.
        If not, freeze them before calling this function.
     """
+    print("Starting create_peft_config function...")
     if peft_config['method'] == 'lora':
+        print("Setting up LoRA configuration...")
         from peft import (
             get_peft_model,
             LoraConfig,
@@ -36,16 +38,19 @@ def create_peft_config(model: Module,
                 elif '_proj' in module_name:
                     target_modules.append(module_name)
             peft_config['kwargs']['target_modules'] = target_modules
+            print(f"Target modules set to: {target_modules}")
         except Exception as e:
-            print(e)
+            print(f"Error setting target modules: {e}")
             target_modules = []
 
         if 'layers_to_ignore' in peft_config:
+            print("Setting layers to ignore...")
             peft_config['kwargs']['layers_to_transform'] = [
                 i for i in range(len(model.model.layers))
                 if i not in peft_config['layers_to_ignore']
             ]
             
+        print("Creating LoraConfig...")
         peft_config = LoraConfig(
             task_type=TaskType.CAUSAL_LM,
             inference_mode=False,
@@ -55,10 +60,13 @@ def create_peft_config(model: Module,
         trainable_weights = [
             n for n, p in model.named_parameters() if p.requires_grad 
         ]
+        print(f"Found {len(trainable_weights)} trainable weights")
+        
         # Prepare int-8 or int-4 model for training
         loaded_in_kbit = (getattr(model, "is_loaded_in_8bit", False) or 
                           getattr(model, "is_loaded_in_4bit", False))
         if loaded_in_kbit:  # From https://huggingface.co/docs/peft/en/package_reference/peft_model:
+            print("Model is loaded in k-bit, preparing for training...")
             # This method wraps the entire protocol for preparing a model before running a training. 
             # 1- Cast the layernorm in fp32 
             # 2- making output embedding layer require grads 
@@ -73,9 +81,11 @@ def create_peft_config(model: Module,
                 gradient_checkpointing_kwargs={'use_reentrant': False},
             )
         
+        print("Getting PEFT model...")
         model = get_peft_model(model, peft_config)
         model.print_trainable_parameters()
 
+        print("Setting up parameter requirements...")
         for n, p in model.named_parameters():
             # Unfreeze weights frozen by get_peft_model()
             if preserve_requires_grad:
@@ -89,8 +99,10 @@ def create_peft_config(model: Module,
                 p.data = p.data.to(getattr(torch, target_dtype))
 
         if not loaded_in_kbit:
+            print("Casting model to target dtype...")
             model.to(dtype=getattr(torch, target_dtype))
 
+        print("Finished create_peft_config function")
         return model, peft_config
     else:
         raise NotImplementedError(f"Sorry PEFT method {peft_config['method']} not implemented yet.")

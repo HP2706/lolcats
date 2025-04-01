@@ -128,7 +128,7 @@ class LolcatsTKWindowAttention(LolcatsLinearAttention):
                 hidden_states: torch.Tensor,
                 attention_mask: Optional[torch.Tensor] = None,
                 position_ids: Optional[torch.LongTensor] = None,
-                past_key_value: Optional[Cache] = None,
+                past_key_values: Optional[Cache] = None,
                 output_attentions: bool = False,
                 use_cache: bool = False,
                 **kwargs,
@@ -140,7 +140,7 @@ class LolcatsTKWindowAttention(LolcatsLinearAttention):
         """
         b, l, _ = hidden_states.size()
         q, k, v, kv_seq_len = self.process_qkv(hidden_states, attention_mask, 
-                                               position_ids, past_key_value)
+                                               position_ids, past_key_values)
         f_q, f_k = self.feature_map_q(q), self.feature_map_k(k)  # Have to do after repeat for grouped-query attn if we use same fmap
 
         if self.train_attention:
@@ -161,7 +161,7 @@ class LolcatsTKWindowAttention(LolcatsLinearAttention):
         else:
             attn_weights = None
             # attention_mask = None  # For now this is always True
-            if past_key_value is None:  # Regular training
+            if past_key_values is None:  # Regular training
                 window_factors = F.sigmoid(self.window_factors)
                 linear_factors = 1 - window_factors if self.affine_attention_factors else 1
                 y_true, a_pred = self.quadratic_attention(q, k, f_q, f_k, v,
@@ -169,10 +169,10 @@ class LolcatsTKWindowAttention(LolcatsLinearAttention):
                                                           window_size=self.window_size)
                 attn_weights = a_pred
             else:
-                past_key_value.window_size = self.decode_window_size
+                past_key_values.window_size = self.decode_window_size
                 if f_q.shape[2] == 1 and kv_seq_len > 1 and not self.training:  # Generating
                     assert use_cache is True
-                    _kv = past_key_value.update_for_decoding(k, v, self.layer_idx,
+                    _kv = past_key_values.update_for_decoding(k, v, self.layer_idx,
                                                              self.feature_map_k,
                                                              dtype=q.dtype)
                     k_cache, v_cache, f_kv_state, f_k_state = _kv
@@ -196,8 +196,8 @@ class LolcatsTKWindowAttention(LolcatsLinearAttention):
 
                 else:  # Stateful training
                     try:
-                        kv_state = past_key_value.kv_states[self.layer_idx]
-                        k_state  = past_key_value.k_states[self.layer_idx]
+                        kv_state = past_key_values.kv_states[self.layer_idx]
+                        k_state  = past_key_values.k_states[self.layer_idx]
                     except IndexError:
                         kv_state, k_state = None, None
                     window_factors = F.sigmoid(self.window_factors)
@@ -208,16 +208,13 @@ class LolcatsTKWindowAttention(LolcatsLinearAttention):
                                                          kv_state=kv_state,
                                                          k_state=k_state)
                     # Save and update KV cache and states
-                    # past_key_value.update(k, v.detach(), self.layer_idx,
-                    #                       fmap_key_states=f_k.detach(),
-                    #                       accumulate_in_fp32=True)
-                    past_key_value.update(k, v, self.layer_idx,
+                    past_key_values.update(k, v, self.layer_idx,
                                           fmap_key_states=f_k,
                                           accumulate_in_fp32=True)
             # Concatenate heads and apply output projection
             y_true = y_true.transpose(1, 2).contiguous().view(b, l, self.hidden_size)
             y_true = self.o_proj(y_true)
-        return y_true, attn_weights, past_key_value
+        return y_true, attn_weights
 
 
 class LinearAttentionTKWindowCache(LinearAttentionState):

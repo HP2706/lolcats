@@ -5,7 +5,11 @@ __pycache__/
 data
 wandb
 apikeys.txt
+reasoning_traces
+configs
+b.ipynb
 # C extensions
+checkpoints
 *.so
 *.err
 *.out

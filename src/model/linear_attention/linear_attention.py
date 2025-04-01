@@ -6,7 +6,9 @@ import copy
 import torch
 import torch.nn as nn
 from omegaconf import OmegaConf, DictConfig
-
+from typing import Union
+from transformers.models.llama.modeling_llama import LlamaAttention
+from transformers.models.qwen2.modeling_qwen2 import Qwen2Attention
 from transformers.cache_utils import Cache  # starting at Transformers v4.36
 
 # Causal linear attention dot product CUDA kernel from fast-transformers
@@ -122,6 +124,7 @@ class LolcatsLinearAttention(nn.Module):
     """
     def __init__(self,
                  base_attn: nn.Module,  # like LlamaAttention
+                 rotary_emb: nn.Module,
                  feature_map: str,
                  feature_map_kwargs: dict,
                  layer_idx: Optional[int] = None,
@@ -172,9 +175,9 @@ class LolcatsLinearAttention(nn.Module):
         
         self.rotary_emb = None
         if self.base_config is not None and self.rotary_config is None:
-            self.rotary_emb = base_attn.rotary_emb
+            self.rotary_emb = rotary_emb
 
-        self.init_weights_(base_attn, remove_base_attn)
+        self.init_weights_(base_attn, rotary_emb, remove_base_attn)
         self.init_feature_map_(feature_map, feature_map_kwargs,
                                learned_kernel, learned_kernel_kwargs)
 
@@ -205,18 +208,28 @@ class LolcatsLinearAttention(nn.Module):
         else:
             self.feature_map_k = copy.deepcopy(self.feature_map_q)
 
-    def init_weights_(self, base_attn: nn.Module, remove_base_attn: bool = True):
+    def init_weights_(self, base_attn: Union[nn.Module, LlamaAttention, Qwen2Attention], rotary_emb: nn.Module, remove_base_attn: bool = True):
         """
         Initialize module layers, weights, positional dependencies, etc. 
         from original softmax attention layer (base_attn)
         """
         # Make other attributes accessible
         self.attention_dropout = 0  # We don't use dropout
-        self.hidden_size = base_attn.hidden_size
-        self.num_heads = base_attn.num_heads
-        self.head_dim = base_attn.head_dim
-        self.num_key_value_heads = base_attn.num_key_value_heads
-        self.num_key_value_groups = base_attn.num_key_value_groups
+        print("type base_attn", type(base_attn))
+        if isinstance(base_attn, LlamaAttention):
+            print("base_attn", base_attn)
+            self.hidden_size = base_attn.config.hidden_size
+            self.num_heads = base_attn.config.num_attention_heads
+            self.head_dim = base_attn.config.head_dim
+            self.num_key_value_heads = base_attn.config.num_key_value_heads
+            self.num_key_value_groups = base_attn.num_key_value_groups
+
+        elif isinstance(base_attn, Qwen2Attention):
+            self.hidden_size = base_attn.config.hidden_size
+            self.num_heads = base_attn.config.num_attention_heads
+            self.head_dim = base_attn.head_dim
+            self.num_key_value_heads = base_attn.config.num_key_value_heads
+            self.num_key_value_groups = base_attn.num_key_value_groups
 
         self.q_shape = [self.num_heads, self.head_dim]
         self.k_shape = [self.num_key_value_heads, self.head_dim]
@@ -224,8 +237,9 @@ class LolcatsLinearAttention(nn.Module):
         device = base_attn.q_proj.weight.device
         # Rotary embeddings
         if self.rotary_emb is None:
-            self.max_position_embeddings = base_attn.max_position_embeddings
-            scaling_factor = getattr(base_attn.rotary_emb, 'scaling_factor', 1.)
+            self.max_position_embeddings = base_attn.config.max_position_embeddings
+            
+            scaling_factor = getattr(rotary_emb, 'scaling_factor', 1.)
             if self.rotary_config is None:
                 self.rotary_emb = get_rotary_embeddings(
                     rope_scaling_type=None,
@@ -259,7 +273,7 @@ class LolcatsLinearAttention(nn.Module):
                     hidden_states: torch.Tensor,
                     attention_mask: Optional[torch.Tensor] = None,
                     position_ids: Optional[torch.LongTensor] = None,
-                    past_key_value: Optional[Tuple[int, torch.Tensor, torch.Tensor]] = None,):  # "legacy" cache approach
+                    past_key_values: Optional[Cache] = None,):  # "legacy" cache approach
         """
         Compute queries, keys, and values
         """
@@ -274,12 +288,9 @@ class LolcatsLinearAttention(nn.Module):
         k = k.view(b, l, *self.k_shape).transpose(1, 2)
         v = v.view(b, l, *self.v_shape).transpose(1, 2)
 
-        if past_key_value is not None:  #  and k.shape[2] > q.shape[2]:  # e.g., when generating
-            past_key_value.window_size = getattr(self, 'decode_window_size', None)  # self.decode_window_size
-            if isinstance(past_key_value, Cache):  # In Transformers v4.36+ this is a DynamicCache object
-                kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
-            else:
-                kv_seq_len += past_key_value[0].shape[-2]
+        if past_key_values is not None:  #  and k.shape[2] > q.shape[2]:  # e.g., when generating
+            past_key_values.window_size = getattr(self, 'decode_window_size', None)  # self.decode_window_size
+            kv_seq_len += past_key_values.get_usable_length(kv_seq_len, self.layer_idx)
 
         # Apply rotary embeddings and repeat for GQA
         if position_ids is not None and kv_seq_len <= position_ids[0, -1]:
@@ -299,7 +310,7 @@ class LolcatsLinearAttention(nn.Module):
                 hidden_states: torch.Tensor,
                 attention_mask: Optional[torch.Tensor] = None,
                 position_ids: Optional[torch.LongTensor] = None,
-                past_key_value: Optional[Tuple[int, torch.Tensor, torch.Tensor]] = None,  # "legacy" cache approach
+                past_key_values: Optional[Cache] = None,
                 output_attentions: bool = False,
                 use_cache: bool = False,
                 **kwargs,
@@ -310,7 +321,7 @@ class LolcatsLinearAttention(nn.Module):
         """
         b, l, _ = hidden_states.size()
         q, k, v, kv_seq_len = self.process_qkv(hidden_states, attention_mask, 
-                                               position_ids, past_key_value)
+                                               position_ids, past_key_values)
         if self.base_inference:
             with torch.no_grad():
                 # 1. Compute "ground-truth" attention output and weights
@@ -343,19 +354,19 @@ class LolcatsLinearAttention(nn.Module):
                     lin_attn_mask = attention_mask[:, None, :, None]  # b, 1, k_len, 1
                 k = k.masked_fill(~lin_attn_mask, 0)
             
-            if past_key_value is not None:  # Initialize states
-                if len(past_key_value.kv_states) == self.layer_idx:
+            if past_key_values is not None:  # Initialize states
+                if len(past_key_values.kv_states) == self.layer_idx:
                     b, h, _, f = k.shape
-                    past_key_value.kv_states.append(
+                    past_key_values.kv_states.append(
                         torch.zeros(b, h, f, self.head_dim, dtype=q.dtype, device=q.device)
                     )
-                    past_key_value.k_states.append(
+                    past_key_values.k_states.append(
                         torch.zeros(b, h, 1, f, dtype=q.dtype, device=q.device)
                     )
                 # Generating
-                if q.shape[2] == 1 and kv_seq_len > 1 and past_key_value is not None:
+                if q.shape[2] == 1 and kv_seq_len > 1 and past_key_values is not None:
                     assert use_cache is True
-                    kv_state, k_state = past_key_value.update(k, v, self.layer_idx,
+                    kv_state, k_state = past_key_values.update(k, v, self.layer_idx,
                                                               accumulate_in_fp32=self.fp32_attention)
                     if self.fp32_attention:
                         q = q.float()
@@ -365,10 +376,10 @@ class LolcatsLinearAttention(nn.Module):
                         y_true = (torch.einsum('bhlf,bhfd->bhld', q, kv_state) /
                                   torch.einsum('bhlf,bhlf->bhl', q, k_state)[..., None])
                 else:
-                    kv_state = past_key_value.kv_states[self.layer_idx]
-                    k_state  = past_key_value.k_states[self.layer_idx]
+                    kv_state = past_key_values.kv_states[self.layer_idx]
+                    k_state  = past_key_values.k_states[self.layer_idx]
                     y_true, _, _ = linear_attention(q, k, v, self.fp32_attention, self.eps)  # Ordinarily the states are ignored
-                    past_key_value.update(k.detach(), v.detach(), self.layer_idx,
+                    past_key_values.update(k.detach(), v.detach(), self.layer_idx,
                                           accumulate_in_fp32=self.fp32_attention)
                                           # doing some unnecessary recomputation here
             else:
@@ -379,7 +390,7 @@ class LolcatsLinearAttention(nn.Module):
             y_true = self.o_proj(y_true)
             attn_weights = None
 
-        return y_true, attn_weights, past_key_value
+        return y_true, attn_weights
 
 
 class LinearAttentionState(Cache):

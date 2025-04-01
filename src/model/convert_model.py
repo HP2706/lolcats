@@ -18,10 +18,11 @@ def convert_attention(model: nn.Module,
         softmax_attns = attention_config['softmax_attentions']
     if attention_config.attention_type != 'softmax':
         layers = traverse_layers(model)
+        rotary_emb = model.model.rotary_emb
         for layer_idx, layer in enumerate(tqdm(layers, desc='Converting attentions...')):
             if layer_idx not in softmax_attns:
                 layer.self_attn = convert_llama_attention(
-                    layer, attention_config, layers, train_attention, remove_base_attn,
+                    layer, rotary_emb, attention_config, layers, train_attention, remove_base_attn,
                 )
                 layer.self_attn.converted = True
             else:  # Freeze any preserved softmax attention layers
@@ -77,6 +78,7 @@ def traverse_layers(model: nn.Module, verbose: bool = False):
 
 
 def convert_llama_attention(layer: nn.Module,
+                            rotary_emb : nn.Module,
                             attention_config: dict,
                             layers: list[nn.Module],  # list of layers
                             train_attention: bool = False,
@@ -86,6 +88,7 @@ def convert_llama_attention(layer: nn.Module,
     """
     return get_attention(**attention_config)(
         base_attn=layer.self_attn,
+        rotary_emb=rotary_emb,
         layer_idx=layer.self_attn.layer_idx,  # Transformers v4.36
         max_layer_idx=len(layers) - 1,
         train_attention=train_attention,

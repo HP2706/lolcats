@@ -63,14 +63,17 @@ def load_data(name: str, dataset_config: dict, pretrained_model_config: dict,
     train_set = train_set.map(
         partial(tokenize_sample, tokenizer=tokenizer, include_label=True),
         remove_columns=list(dataset.features),
+        num_proc=os.cpu_count()
     )
     val_set = val_set.map(
         partial(tokenize_sample, tokenizer=tokenizer, include_label=True),
         remove_columns=list(dataset.features),
+        num_proc=os.cpu_count()
     )   
     test_set = test_set.map(
         partial(tokenize_sample, tokenizer=tokenizer, include_label=False),
         remove_columns=list(dataset.features),
+        num_proc=os.cpu_count()
     )
 
     # Chunk together train and val sets

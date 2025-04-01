@@ -4,7 +4,7 @@ Script to distill pretrained Transformers into linear attention variants
 import sys
 import os
 from os.path import join
-
+from typing import Any
 import argparse
 import torch
 from omegaconf import OmegaConf
