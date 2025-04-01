@@ -27,7 +27,7 @@ from model.pretrained import get_pretrained_loader
 from model.load_model import load_and_convert_attns, load_and_convert_finetune
 from model.convert_model import toggle_attention, remove_base_attention
 from model.utils import count_parameters
-
+from transformers import TrainingArguments
 
 def get_args():
     """Parse command line arguments"""

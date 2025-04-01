@@ -11,7 +11,7 @@
 #SBATCH --partition=gpu
 
 # Parse command line arguments
-MODEL_TYPE="r1"  # Default to r1
+MODEL_TYPE="qwen"  # Default to r1
 while [[ $# -gt 0 ]]; do
   case $1 in
     --model_type)

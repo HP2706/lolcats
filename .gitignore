@@ -15,6 +15,7 @@ checkpoints
 *.out
 *.log
 models
+*.env
 
 # Distribution / packaging
 .Python

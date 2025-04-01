@@ -19,8 +19,12 @@ done
 # Check GPU memory and choose appropriate config
 GPU_MEM=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | awk '{print $1}')
 
-
+source .env
 module load python && source .venv/bin/activate
+
+# find hf token in env variables
+HUGGINGFACE_TOKEN=$(printenv HUGGINGFACE_TOKEN)
+echo "hf token: $HUGGINGFACE_TOKEN"
 
 if [ "$MODEL_TYPE" = "qwen" ]; then
     if [ "$GPU_MEM" -ge 80000 ]; then
@@ -31,8 +35,8 @@ if [ "$MODEL_TYPE" = "qwen" ]; then
             --finetune_config deepscaler_finetune_lora_qkvo_reasoning_dataset \
             --eval_config eval_alpaca_clean \
             --lk_zero_init \
-            --verbose --seed 0 --replicate 0
-            --huggingface_token $HUGGINGFACE_TOKEN
+            --verbose --seed 0 --replicate 0 \
+            --huggingface_token "$HUGGINGFACE_TOKEN"
     else
         # Use 40GB config for smaller GPUs
         echo "Using 40GB config for Qwen"
@@ -41,8 +45,8 @@ if [ "$MODEL_TYPE" = "qwen" ]; then
             --finetune_config deepscaler_finetune_lora_qkvo_reasoning_dataset \
             --eval_config eval_alpaca_clean \
             --lk_zero_init \
-            --verbose --seed 0 --replicate 0
-            --huggingface_token $HUGGINGFACE_TOKEN
+            --verbose --seed 0 --replicate 0 \
+            --huggingface_token "$HUGGINGFACE_TOKEN"
     fi
 else
     if [ "$GPU_MEM" -ge 80000 ]; then
@@ -53,8 +57,8 @@ else
             --finetune_config r1_finetune_lora_qkvo_reasoning_dataset \
             --eval_config eval_alpaca_clean \
             --lk_zero_init \
-            --verbose --seed 0 --replicate 0
-            --huggingface_token $HUGGINGFACE_TOKEN
+            --verbose --seed 0 --replicate 0 \
+            --huggingface_token "$HUGGINGFACE_TOKEN"
     else
         # Use 40GB config for smaller GPUs
         echo "Using 40GB config for R1"
@@ -63,7 +67,7 @@ else
             --finetune_config r1_finetune_lora_qkvo_reasoning_dataset \
             --eval_config eval_alpaca_clean \
             --lk_zero_init \
-            --verbose --seed 0 --replicate 0
-            --huggingface_token $HUGGINGFACE_TOKEN
+            --verbose --seed 0 --replicate 0 \
+            --huggingface_token "$HUGGINGFACE_TOKEN"
     fi
 fi

@@ -4,7 +4,7 @@ dataset:
     name: default
     path: open-r1/OpenR1-Math-220k
     chunk_size: 1024  # sequence length for distilling
-    n_elms: 100
+    n_elms: 1000
     concat_data: true
     cache_dir: 'data'  # Change this to where you want to save
   pretrained_model_config:  # will be updated based on model_config
